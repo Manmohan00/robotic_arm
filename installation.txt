@@ -1,0 +1,104 @@
+all of this was implemented in the home directory
+
+apt policy python3-picamera2 python3-libcamera
+
+python3 -c "import libcamera; print('libcamera works')"
+python3 -c "from picamera2 import Picamera2; print('picamera2 works')"
+
+
+# Remove old environment
+rm -rf gesture_env
+
+# Create new environment with system packages
+python3 -m venv --system-site-packages gesture_env
+
+# Activate
+source gesture_env/bin/activate
+
+# Check Python version
+python --version
+
+# Inside venv
+python -c "import libcamera; print('libcamera works in venv')"
+python -c "from picamera2 import Picamera2; print('picamera2 works in venv')"
+
+pip install mediapipe==0.9.0.1
+caused errors
+
+ ----
+ # In your activated venv
+pip install mediapipe==0.10.18 --use-pep517 --no-cache-dir
+
+pip uninstall tensorflow  # If installed
+pip install tflite-runtime==2.14.0
+
+
+# Ensure essential libraries are present
+sudo apt install -y libjasper1 libhdf5-103-1 libqtgui4 libatlas3-base
+caused errors 
+ ----
+ sudo apt update && sudo apt install -y \
+    libopenjp2-7 \
+    libhdf5-103-1 \
+    libqt5gui5 \
+    libatlas3-base \
+    libqt5webkit5 \
+    libqt5test5
+
+# Check sources.list
+cat /etc/apt/sources.list
+cat /etc/apt/sources.list.d/raspi.list
+
+
+or try 
+
+for pkg in libopenjp2-7 libhdf5-103-1 libqt5gui5 libatlas3-base libqt5webkit5 libqt5test5; do
+    echo "Installing $pkg..."
+    sudo apt install -y $pkg
+done
+
+
+# Check installed versions
+dpkg -l | grep -E 'libopenjp2|libhdf5|libqt5gui|libatlas3'
+
+# Expected output:
+# ii  libopenjp2-7:arm64      2.5.0-2          arm64        JPEG 2000 image library
+# ii  libhdf5-103-1:arm64     1.10.8+repack-4  arm64        HDF5 C runtime files
+# ii  libqt5gui5:arm64        5.15.8+dfsg-2    arm64        Qt5 GUI module
+
+
+
+# test with the following 
+from picamera2 import Picamera2
+import mediapipe as mp
+import cv2
+
+picam2 = Picamera2()
+config = picam2.create_preview_configuration(main={"format": 'RGB888', "size": (640, 480)})
+picam2.configure(config)
+picam2.start()
+
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(min_detection_confidence=0.5)
+
+try:
+    while True:
+        frame = picam2.capture_array()  # RGB888, shape (480, 640, 3)
+        # DO NOT convert to BGR for MediaPipe
+        results = hands.process(frame)
+        if results.multi_hand_landmarks:
+            print("Hand detected!")
+        else:
+            print("No hands")
+        # If you want to display:
+        cv2.imshow("Frame", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+finally:
+    picam2.stop()
+    hands.close()
+    cv2.destroyAllWindows()
+
+# Check Frame Data
+print(frame.shape, frame.dtype)
+# Expected: (480, 640, 3) uint8
