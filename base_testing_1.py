@@ -281,7 +281,18 @@ class GestureControlSystem:
         )
         self.picam2.configure(config)
         
-        # Set camera controls for stable frame rate
+         # Set camera controls for stable frame rate
+         #self.picam2.set_controls({
+         #   "FrameDurationLimits": (int(1e6/TARGET_FPS), int(1e6/TARGET_FPS)),
+         #   "AwbEnable": True,
+         #    "AeEnable": True,
+         #   "AeExposureMode": 1,  # Normal exposure
+         #   "AeMeteringMode": 0,  # Center-weighted
+         #   "NoiseReductionMode": 2,
+         #    "AwbMode": 2,  # Grey world white balance
+         #   "ColourGains": (1.8, 1.2),  # Experiment with values
+        #  })
+       
         self.picam2.set_controls({
             "FrameDurationLimits": (int(1e6/TARGET_FPS), int(1e6/TARGET_FPS)),
             "AwbEnable": True,
@@ -289,12 +300,13 @@ class GestureControlSystem:
             "AeExposureMode": 1,  # Normal exposure
             "AeMeteringMode": 0,  # Center-weighted
             "NoiseReductionMode": 2,
-             "AwbMode": 2,  # Grey world white balance
-            "ColourGains": (1.8, 1.2),  # Experiment with values
+            "AwbMode": 0,  # Grey world white balance
+            "ExposureTime": 500000,
+            "ColourGains": (0.0, 0.0),  # Experiment with values
         })
         
         self.picam2.start()
-        self.recognizer = HandGestureRecognizer()
+        #self.recognizer = HandGestureRecognizer()
         self.recognizer = ASLGestureController()
 
         self.fps_queue = deque(maxlen=30)

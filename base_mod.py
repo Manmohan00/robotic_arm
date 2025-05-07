@@ -27,7 +27,7 @@ import absl.logging
 absl.logging.set_verbosity(absl.logging.ERROR)
 
 # ================== CONFIGURATION ==================
-SIMULATION_MODE = True  # Enable if hardware isn't available
+SIMULATION_MODE = False  # Enable if hardware isn't available
 FRAME_WIDTH = 1920        # Camera resolution width 640
 FRAME_HEIGHT = 1080       # Camera resolution height 480
 CONFIDENCE_THRESHOLD = 0.75  # Minimum confidence for accepting gestures
@@ -150,9 +150,24 @@ class GestureControlSystem:
             "AeExposureMode": 1,  # Normal exposure
             "AeMeteringMode": 0,  # Center-weighted
             "NoiseReductionMode": 2,
-             "AwbMode": 2,  # Grey world white balance
-            "ColourGains": (1.8, 1.2),  # Experiment with values
+            "AwbMode": 0,  # Grey world white balance
+            "ExposureTime": 500000,
+            "ColourGains": (0.0, 0.0),  # Experiment with values
         })
+           #self.picam2.set_controls({
+           # "FrameDurationLimits": (int(1e6/TARGET_FPS), int(1e6/TARGET_FPS)),
+           # "AwbEnable": True,
+            #"AeEnable": True,
+            #"AeExposureMode": 1,  # Normal exposure
+           # "AeMeteringMode": 0,  # Center-weighted
+           # "NoiseReductionMode": 2,
+           # "AwbMode": 0,  # Grey world white balance
+            #"ColourGains": (1.8, 1.2),  # Experiment with values
+            #"AeFlickerMode": 2,  # 50Hz anti-flicker
+           # "ExposureTime": 10000,
+          #  "AeExposureMode": controls.AeExposureModeEnum.Short,
+           # "FrameDurationLimits": (10000, 10000)  # Sync with exposure
+       # })
         
         self.picam2.start()
         self.recognizer = HandGestureRecognizer()

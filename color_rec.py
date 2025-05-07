@@ -294,7 +294,7 @@ class GestureControlSystem:
         self.recognizer = HandGestureRecognizer()
         self.colour_recognizer = ColourRecognizer()
         self.mimicking_system = HandMimickingSystem()  # Add new system
-        self.mimicking_mode = False  
+        self.mimicking_mode = True  
 
         self.fps_queue = deque(maxlen=30)
         self.last_time = time.time()
@@ -385,40 +385,43 @@ class GestureControlSystem:
                 else:
                     # Regular gesture recognition mode (existing code)
                     gesture, confidence, processed_frame = self.recognizer.predict_gesture(frame)
-                    gesture, confidence, processed_frame = self.colour_recognizer.detect_colour(processed_frame, draw=True)
-                
-                # Add mode toggle with 'm' key
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('m'):
-                    self.mimicking_mode = not self.mimicking_mode
-                    print(f"[SYSTEM] {'Mimicking' if self.mimicking_mode else 'Gesture'} mode activated")
+                    #gesture, confidence, processed_frame = self.colour_recognizer.detect_colour(processed_frame, draw=True)
+                    
+                    if gesture and confidence > CONFIDENCE_THRESHOLD:
+                            self.handle_gesture_command(gesture)
 
-                if gesture and confidence > CONFIDENCE_THRESHOLD:
-                    self.handle_gesture_command(gesture)
+                    if gesture:
+                        cv2.putText(
+                            processed_frame, 
+                            f"{gesture} ({confidence:.2f})", 
+                            (10, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 
+                            1, 
+                            (0, 255, 0) if confidence > CONFIDENCE_THRESHOLD else (0, 0, 255), 
+                            2
+                        )
 
-                if gesture:
+                    fps = self.calculate_fps()
                     cv2.putText(
-                        processed_frame, 
-                        f"{gesture} ({confidence:.2f})", 
-                        (10, 30), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 
-                        1, 
-                        (0, 255, 0) if confidence > CONFIDENCE_THRESHOLD else (0, 0, 255), 
+                        processed_frame,
+                        f"FPS: {fps:.1f}",
+                        (FRAME_WIDTH - 120, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0),
                         2
                     )
 
-                fps = self.calculate_fps()
-                cv2.putText(
-                    processed_frame,
-                    f"FPS: {fps:.1f}",
-                    (FRAME_WIDTH - 120, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2
-                )
-
                 cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
+                
+                
+                # Add mode toggle with 'm' key
+                key = cv2.waitKey(1) & 0xFF
+                
+                if key == ord('m'):
+                    self.mimicking_mode = not self.mimicking_mode
+                    print(f"[SYSTEM] {'Mimicking' if self.mimicking_mode else 'Gesture'} mode activated")
+                        
                 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     self.running = False
