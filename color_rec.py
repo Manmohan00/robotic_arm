@@ -22,6 +22,12 @@ from collections import deque
 import arm_code
 from picamera2 import Picamera2
 from libcamera import Transform
+import pyttsx3
+from vosk import Model, KaldiRecognizer
+import sounddevice as sd
+import queue
+import json
+
 
 import absl.logging
 absl.logging.set_verbosity(absl.logging.ERROR)
@@ -34,7 +40,17 @@ CONFIDENCE_THRESHOLD = 0.75  # Minimum confidence for accepting gestures
 FRAME_SKIP = 2 
 TARGET_FPS = 15           # Process every nth frame (performance optimization)
 INVERT_CAMERA = True     # Mirror camera view for more intuitive interaction
+# ========== VOICE CONTROL CONFIGURATION ==========
+VOICE_MODEL_PATH = "models/vosk-model-small-en-us-0.15"
+VOICE_COMMANDS = ["fist", "rock", "peace", "highfive"]
+tts_engine = pyttsx3.init()
+recognizer_model = Model(VOICE_MODEL_PATH)
+recognizer = KaldiRecognizer(recognizer_model, 16000)
 
+def speak(text):
+    print(f"speaking ... {text}")
+    tts_engine.say(text)
+    tts_engine.runAndWait()
 # ================== HAND GESTURE RECOGNIZER ==================
 class HandGestureRecognizer:
     def __init__(self):
@@ -176,6 +192,130 @@ class ColourRecognizer:
                     self.confidence = avg_conf
         return self.current_colour, self.confidence, frame
     
+class ASLRecognizer:
+    def __init__(self):
+        self.mp_hands = mp.solutions.hands
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.hands = self.mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.7)
+        self.last_letter = None
+        self.last_time = 0
+        self.asl_letters = ['A', 'B', 'E', 'F', 'H', 'I', 'L', 'W', 'X', 'Y']
+
+    def recognize_asl(self, hand_landmarks):
+        tip_ids = [4, 8, 12, 16, 20]  # Thumb to pinky
+        landmarks = [(lm.x, lm.y) for lm in hand_landmarks.landmark]
+        
+        fingers = []
+
+        # Thumb: tip is to the left of the IP joint (right hand)
+        thumb_up = landmarks[4][0] < landmarks[3][0]
+        fingers.append(thumb_up)
+
+        # Other fingers: tip above PIP
+        for i in range(1, 5):
+            fingers.append(landmarks[tip_ids[i]][1] < landmarks[tip_ids[i] - 2][1])
+
+        # A: Thumb up, all other fingers down
+        if fingers == [True, False, False, False, False]:
+            return "A"
+        
+        # B: All fingers up except thumb
+        elif fingers == [False, True, True, True, True]:
+            return "B"
+
+        # F: Index down slightly, others up
+        index_down = landmarks[8][1] > landmarks[6][1]
+        middle_up = landmarks[12][1] < landmarks[10][1]
+        ring_up = landmarks[16][1] < landmarks[14][1]
+        pinky_up = landmarks[20][1] < landmarks[18][1]
+
+        if index_down and thumb_up and middle_up and ring_up and pinky_up:
+            return "F"
+        
+        # H: Index + middle up, others down
+        if fingers == [False, True, True, False, False]:
+            return "H"
+        
+        # I: Only pinky up
+        if fingers == [False, False, False, False, True]:
+            return "I"
+        
+        # L: Thumb and index up
+        if fingers == [True, True, False, False, False]:
+            return "L"
+        
+        # W: Index + middle + ring up
+        if fingers == [False, True, True, True, False]:
+            return "W"
+        
+        # X: Index slightly bent (tip below DIP but above PIP)
+        index_tip_y = landmarks[8][1]
+        index_dip_y = landmarks[7][1]
+        index_pip_y = landmarks[6][1]
+        index_slightly_bent = index_tip_y > index_dip_y and index_tip_y < index_pip_y
+        if index_slightly_bent and not fingers[0] and not fingers[2] and not fingers[3] and not fingers[4]:
+            return "X"
+        
+        # Y: Thumb and pinky up
+        if fingers == [True, False, False, False, True]:
+            return "Y"
+
+        # E: All fingers slightly bent (tip below PIP but above MCP)
+        def slightly_bent(tip, pip, mcp):
+            return landmarks[tip][1] > landmarks[pip][1] and landmarks[tip][1] < landmarks[mcp][1]
+        
+        if (not fingers[0] and
+            all(slightly_bent(t, t-2, t-3) for t in tip_ids[1:])):
+            return "E"
+
+        return None
+
+    def predict_letter(self, frame, draw=True):
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = self.hands.process(image_rgb)
+        letter = None
+        if result.multi_hand_landmarks:
+            for hand_landmarks in result.multi_hand_landmarks:
+                letter = self.recognize_asl(hand_landmarks)
+                if draw:
+                    self.mp_drawing.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
+        return letter, frame
+
+    def send_asl_command(self, letter):
+        print(f"[ASL] Recognized: {letter}")
+        try:
+            if letter == 'A':
+                for f in range(5): arm_code.move(finger=f, position=0)
+            elif letter == 'B':
+                for f in range(1, 5): arm_code.move(finger=f, position=2)
+                arm_code.move(finger=0, position=0)
+            elif letter == 'F':
+                for f in range(5): arm_code.move(finger=f, position=2)
+                arm_code.move(finger=1, position=0)  # index folded
+            elif letter == 'H':
+                arm_code.move(finger=1, position=2)
+                arm_code.move(finger=2, position=2)
+                for f in [0, 3, 4]: arm_code.move(finger=f, position=0)
+            elif letter == 'I':
+                arm_code.move(finger=0, position=0)
+                for f in range(1, 4): arm_code.move(finger=f, position=0)
+                arm_code.move(finger=4, position=2)
+            elif letter == 'L':
+                arm_code.move(finger=0, position=2)
+                arm_code.move(finger=1, position=2)
+                for f in [2, 3, 4]: arm_code.move(finger=f, position=0)
+            elif letter == 'W':
+                for f in [1, 2, 3]: arm_code.move(finger=f, position=2)
+                for f in [0, 4]: arm_code.move(finger=f, position=0)
+            elif letter == 'X':
+                arm_code.move(finger=1, position=2)
+                for f in [0, 2, 3, 4]: arm_code.move(finger=f, position=0)
+            elif letter == 'Y':
+                arm_code.move(finger=0, position=2)
+                arm_code.move(finger=4, position=2)
+                for f in [1, 2, 3]: arm_code.move(finger=f, position=0)
+        except Exception as e:
+            print(f"[ERROR] Failed to send ASL command: {e}")
 
 class HandMimickingSystem:
     def __init__(self):
@@ -262,6 +402,32 @@ class HandMimickingSystem:
             return False
 
 
+class VoiceRecognizer(threading.Thread):
+    def __init__(self, callback):
+        super().__init__(daemon=True)
+        self.callback = callback
+        self.running = True
+        self.q = queue.Queue()
+
+    def callback_stream(self, indata, frames, time, status):
+        if status:
+            print("⚠️ Mic status:", status)
+        self.q.put(bytes(indata))
+
+    def run(self):
+        print("...Voice control started...")
+        speak("Voice control is ready.")
+        with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16',
+                               channels=1, callback=self.callback_stream):
+            while self.running:
+                data = self.q.get()
+                if recognizer.AcceptWaveform(data):
+                    result = json.loads(recognizer.Result())
+                    text = result.get("text", "").lower().strip()
+                    if text in VOICE_COMMANDS:
+                        self.callback(text)
+
+
 # ================== MAIN CONTROL SYSTEM ==================
 class GestureControlSystem:
     def __init__(self):
@@ -294,8 +460,13 @@ class GestureControlSystem:
         self.recognizer = HandGestureRecognizer()
         self.colour_recognizer = ColourRecognizer()
         self.mimicking_system = HandMimickingSystem()  # Add new system
-        self.mimicking_mode = True  
-
+        self.mimicking_mode = False
+        self.asl_recognizer = ASLRecognizer()
+        self.asl_mode = False  # Add a mode toggle for ASL
+        self.voice_thread = VoiceRecognizer(self.handle_voice_command)
+        self.voice_thread.start()
+        self.voice_mode = True
+        
         self.fps_queue = deque(maxlen=30)
         self.last_time = time.time()
 
@@ -318,6 +489,21 @@ class GestureControlSystem:
             self.last_gesture = gesture
             self.last_gesture_time = current_time
             print(f"[ACTION] {gesture} detected - Command: {cmd}")
+            
+    def handle_voice_command(self, command):
+        gesture = command  # 'fist', 'rock', etc.
+        responses = {
+            'fist': ("Fist bump!", "FIST"),
+            'rock': ("Rock on!", "ROCK"),
+            'peace': ("Peace!", "PEACE"),
+            'highfive': ("High five!", "HIGHFIVE")
+        }
+
+        if gesture in responses:
+            text, cmd = responses[gesture]
+            speak(text)
+            self.send_command(cmd)
+            print(f"[VOICE ACTION] {gesture} triggered - Command: {cmd}")
 
     def send_command(self, command):
         print('Sending command to arm:', command)
@@ -373,8 +559,15 @@ class GestureControlSystem:
                     if cv2.waitKey(1) & 0xFF in (27, ord('q')):
                         self.running = False
                     continue
-                
-                if self.mimicking_mode:
+                    
+                if self.asl_mode:
+                    letter, processed_frame = self.asl_recognizer.predict_letter(frame)
+                    if letter and (letter != self.asl_recognizer.last_letter or time.time() - self.asl_recognizer.last_time > 2):
+                        self.asl_recognizer.send_asl_command(letter)
+                        self.asl_recognizer.last_letter = letter
+                        self.asl_recognizer.last_time = time.time()
+                    cv2.putText(processed_frame, f"ASL: {letter}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                elif self.mimicking_mode:
                     # Hand mimicking mode
                     signals, has_hand, processed_frame = self.mimicking_system.process_hand(frame)
                     if has_hand:
@@ -415,15 +608,18 @@ class GestureControlSystem:
                 cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
                 
                 
-                # Add mode toggle with 'm' key
+                # Add mode toggle
                 key = cv2.waitKey(1) & 0xFF
                 
                 if key == ord('m'):
                     self.mimicking_mode = not self.mimicking_mode
                     print(f"[SYSTEM] {'Mimicking' if self.mimicking_mode else 'Gesture'} mode activated")
                         
-                
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if key == ord('a'):
+                    self.asl_mode = not self.asl_mode
+                    print(f"[SYSTEM] {'ASL' if self.asl_mode else 'Other'} mode activated")
+                    
+                if key == ord('q'):
                     self.running = False
 
         except Exception as e:
