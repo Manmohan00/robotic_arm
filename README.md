@@ -1,8 +1,8 @@
-# Current working file : base_mod.py
+# Current working file : color_rec.py
 
 ##  open terminal
 
 ```
   source gesture_env/bin/activate
-  python /robotic_arm/base_mod.py
+  python /robotic_arm/color_rec.py
 ```
