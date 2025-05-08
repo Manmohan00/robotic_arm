@@ -1,6 +1,6 @@
 from Maestro_master import maestro
 
-def move(finger: int,position: int, SIMULATION_MODE=True):
+def move(finger: int,position: int, SIMULATION_MODE=False):
     if SIMULATION_MODE:
         print('received command to arm ....')
         return

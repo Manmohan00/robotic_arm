@@ -151,7 +151,7 @@ class GestureControlSystem:
             "AeMeteringMode": 0,  # Center-weighted
             "NoiseReductionMode": 2,
             "AwbMode": 0,  # Grey world white balance
-            "ExposureTime": 500000,
+            "ExposureTime": 100000,
             "ColourGains": (0.0, 0.0),  # Experiment with values
         })
            #self.picam2.set_controls({

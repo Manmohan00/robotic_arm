@@ -33,7 +33,7 @@ import absl.logging
 absl.logging.set_verbosity(absl.logging.ERROR)
 
 # ================== CONFIGURATION ==================
-SIMULATION_MODE = True  # Enable if hardware isn't available
+SIMULATION_MODE = False  # Enable if hardware isn't available
 FRAME_WIDTH = 1920        # Camera resolution width 640
 FRAME_HEIGHT = 1080       # Camera resolution height 480
 CONFIDENCE_THRESHOLD = 0.75  # Minimum confidence for accepting gestures
@@ -336,7 +336,8 @@ class HandMimickingSystem:
     
     def process_hand(self, frame, draw=True):
         """Process frame to extract precise finger positions for mimicking"""
-        results = self.hands.process(frame)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(rgb_frame)
         control_signals = [0, 0, 0, 0, 0]  # Default position
         self.has_hand = False
         
@@ -353,18 +354,27 @@ class HandMimickingSystem:
             
             # Extract finger extension values
             landmarks = hand_landmarks.landmark
+            print('landmarks ...', landmarks)
             palm_pos = np.array([landmarks[0].x, landmarks[0].y, landmarks[0].z])
+            print('palm_pos ...', palm_pos)
+            
+            finger_bases = [2, 5, 9, 13, 17]  # Thumb, Index, Middle, Ring, Pinky
             
             # Calculate finger extensions (0=closed, 1=mid, 2=extended)
             for i, tip_idx in enumerate(self.finger_tips):
                 finger_tip = np.array([landmarks[tip_idx].x, landmarks[tip_idx].y, landmarks[tip_idx].z])
+                #print('finger_tip ...', finger_tip)
+                
                 # Determine base joint for each finger
-                base_idx = tip_idx - (4 if i > 0 else 3)
+                base_idx = finger_bases[i]
+                
+                #print('base_idx ...', base_idx)
                 base_pos = np.array([landmarks[base_idx].x, landmarks[base_idx].y, landmarks[base_idx].z])
+                #print('base_pos ...', base_pos)
                 
                 # Calculate extension ratio
                 extension = np.linalg.norm(finger_tip - base_pos) / np.linalg.norm(base_pos - palm_pos)
-                
+                #print('extension ....',extension)
                 # Map to control values (0-2)
                 if extension < 0.5:
                     control_signals[i] = 0  # Closed
@@ -452,13 +462,15 @@ class GestureControlSystem:
             "AeExposureMode": 1,  # Normal exposure
             "AeMeteringMode": 0,  # Center-weighted
             "NoiseReductionMode": 2,
-             "AwbMode": 2,  # Grey world white balance
-            "ColourGains": (1.8, 1.2),  # Experiment with values
+            "AwbMode": 0,  # Grey world white balance
+            "ExposureTime": 100000,
+            "ColourGains": (0.0, 0.0),  # Experiment with values
+            "FrameDurationLimits": (10000, 10000) 
         })
         
         self.picam2.start()
-        self.recognizer = HandGestureRecognizer()
-        self.colour_recognizer = ColourRecognizer()
+        #self.recognizer = HandGestureRecognizer()
+        #self.colour_recognizer = ColourRecognizer()
         self.mimicking_system = HandMimickingSystem()  # Add new system
         self.mimicking_mode = False
         self.asl_recognizer = ASLRecognizer()
