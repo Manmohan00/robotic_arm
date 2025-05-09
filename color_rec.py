@@ -15,9 +15,7 @@ import mediapipe as mp
 import time
 import numpy as np
 import tflite_runtime.interpreter as tflite
-# import pyttsx3
 import threading
-# import speech_recognition as sr
 from collections import deque
 import arm_code
 from picamera2 import Picamera2
@@ -27,19 +25,18 @@ from vosk import Model, KaldiRecognizer
 import sounddevice as sd
 import queue
 import json
-
-
 import absl.logging
 absl.logging.set_verbosity(absl.logging.ERROR)
 
 # ================== CONFIGURATION ==================
-SIMULATION_MODE = False  # Enable if hardware isn't available
+SIMULATION_MODE = True  # Enable if hardware isn't available
 FRAME_WIDTH = 1920        # Camera resolution width 640
 FRAME_HEIGHT = 1080       # Camera resolution height 480
 CONFIDENCE_THRESHOLD = 0.75  # Minimum confidence for accepting gestures
 FRAME_SKIP = 2 
 TARGET_FPS = 15           # Process every nth frame (performance optimization)
 INVERT_CAMERA = True     # Mirror camera view for more intuitive interaction
+
 # ========== VOICE CONTROL CONFIGURATION ==========
 VOICE_MODEL_PATH = "models/vosk-model-small-en-us-0.15"
 VOICE_COMMANDS = ["fist", "rock", "peace", "highfive"]
@@ -51,6 +48,7 @@ def speak(text):
     print(f"speaking ... {text}")
     tts_engine.say(text)
     tts_engine.runAndWait()
+    
 # ================== HAND GESTURE RECOGNIZER ==================
 class HandGestureRecognizer:
     def __init__(self):
@@ -142,55 +140,6 @@ class HandGestureRecognizer:
         
         return self.current_gesture, self.confidence, frame
 
-
-class ColourRecognizer:
-    def __init__(self):
-        # Define HSV ranges for 5 distinct colours
-        self.colour_ranges = {
-            'red':    ((0, 100, 100), (10, 255, 255)),
-            'green':  ((40, 70, 70), (80, 255, 255)),
-            'blue':   ((100, 150, 0), (140, 255, 255)),
-            'yellow': ((20, 100, 100), (30, 255, 255)),
-            'purple': ((140, 100, 100), (160, 255, 255)),
-        }
-        self.prediction_queue = deque(maxlen=5)
-        self.current_colour = None
-        self.confidence = 0
-
-    def detect_colour(self, frame, draw=True):
-        hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-        max_area = 0
-        detected_colour = None
-
-        for colour, (lower, upper) in self.colour_ranges.items():
-            mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
-            area = cv2.countNonZero(mask)
-            if area > max_area:
-                max_area = area
-                detected_colour = colour
-            if draw and area > 2000:  # Draw contour if significant area
-                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(frame, contours, -1, (0,255,0), 2)
-
-        # Confidence: proportion of frame occupied by detected colour
-        confidence = max_area / (frame.shape[0] * frame.shape[1])
-        self.prediction_queue.append((detected_colour, confidence))
-
-        # Majority vote for stability
-        if len(self.prediction_queue) == self.prediction_queue.maxlen:
-            colour_counts = {}
-            total_confidence = {}
-            for c, conf in self.prediction_queue:
-                if c is not None:
-                    colour_counts[c] = colour_counts.get(c, 0) + 1
-                    total_confidence[c] = total_confidence.get(c, 0) + conf
-            if colour_counts:
-                most_common = max(colour_counts.items(), key=lambda x: x[1])
-                avg_conf = total_confidence[most_common[0]] / most_common[1]
-                if avg_conf > 0.01:  # Adjustable threshold
-                    self.current_colour = most_common[0]
-                    self.confidence = avg_conf
-        return self.current_colour, self.confidence, frame
     
 class ASLRecognizer:
     def __init__(self):
@@ -336,8 +285,7 @@ class HandMimickingSystem:
     
     def process_hand(self, frame, draw=True):
         """Process frame to extract precise finger positions for mimicking"""
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(rgb_frame)
+        results = self.hands.process(frame)
         control_signals = [0, 0, 0, 0, 0]  # Default position
         self.has_hand = False
         
@@ -354,27 +302,18 @@ class HandMimickingSystem:
             
             # Extract finger extension values
             landmarks = hand_landmarks.landmark
-            print('landmarks ...', landmarks)
             palm_pos = np.array([landmarks[0].x, landmarks[0].y, landmarks[0].z])
-            print('palm_pos ...', palm_pos)
-            
-            finger_bases = [2, 5, 9, 13, 17]  # Thumb, Index, Middle, Ring, Pinky
             
             # Calculate finger extensions (0=closed, 1=mid, 2=extended)
             for i, tip_idx in enumerate(self.finger_tips):
                 finger_tip = np.array([landmarks[tip_idx].x, landmarks[tip_idx].y, landmarks[tip_idx].z])
-                #print('finger_tip ...', finger_tip)
-                
                 # Determine base joint for each finger
-                base_idx = finger_bases[i]
-                
-                #print('base_idx ...', base_idx)
+                base_idx = tip_idx - (4 if i > 0 else 3)
                 base_pos = np.array([landmarks[base_idx].x, landmarks[base_idx].y, landmarks[base_idx].z])
-                #print('base_pos ...', base_pos)
                 
                 # Calculate extension ratio
                 extension = np.linalg.norm(finger_tip - base_pos) / np.linalg.norm(base_pos - palm_pos)
-                #print('extension ....',extension)
+                
                 # Map to control values (0-2)
                 if extension < 0.5:
                     control_signals[i] = 0  # Closed
@@ -416,24 +355,33 @@ class VoiceRecognizer(threading.Thread):
     def __init__(self, callback):
         super().__init__(daemon=True)
         self.callback = callback
-        self.running = True
+        self._stop_event = threading.Event()
         self.q = queue.Queue()
 
     def callback_stream(self, indata, frames, time, status):
         if status:
-            print("⚠️ Mic status:", status)
+            print("Mic status:", status)
+        print("Received audio data")  # For debugging
         self.q.put(bytes(indata))
+
+    def stop(self):
+        self._stop_event.set()
 
     def run(self):
         print("...Voice control started...")
         speak("Voice control is ready.")
         with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16',
                                channels=1, callback=self.callback_stream):
-            while self.running:
-                data = self.q.get()
+            while not self._stop_event.is_set():
+                try:
+                    data = self.q.get(timeout=0.1)
+                except queue.Empty:
+                    continue
                 if recognizer.AcceptWaveform(data):
                     result = json.loads(recognizer.Result())
                     text = result.get("text", "").lower().strip()
+                    if text:  # Print any recognized text, even if not a command
+                        print(f"[VOICE RECOGNIZED] {text}")
                     if text in VOICE_COMMANDS:
                         self.callback(text)
 
@@ -462,29 +410,22 @@ class GestureControlSystem:
             "AeExposureMode": 1,  # Normal exposure
             "AeMeteringMode": 0,  # Center-weighted
             "NoiseReductionMode": 2,
-            "AwbMode": 0,  # Grey world white balance
-            "ExposureTime": 100000,
-            "ColourGains": (0.0, 0.0),  # Experiment with values
-            "FrameDurationLimits": (10000, 10000) 
+             "AwbMode": 2,  # Grey world white balance
+            "ColourGains": (1.8, 1.2),  # Experiment with values
         })
         
         self.picam2.start()
-        #self.recognizer = HandGestureRecognizer()
-        #self.colour_recognizer = ColourRecognizer()
-        self.mimicking_system = HandMimickingSystem()  # Add new system
+        self.recognizer = HandGestureRecognizer()
+        self.mimicking_system = HandMimickingSystem()
         self.mimicking_mode = False
         self.asl_recognizer = ASLRecognizer()
-        self.asl_mode = False  # Add a mode toggle for ASL
-        self.voice_thread = VoiceRecognizer(self.handle_voice_command)
-        self.voice_thread.start()
+        self.asl_mode = False
+        
+        self.voice_thread = None
         self.voice_mode = True
         
         self.fps_queue = deque(maxlen=30)
         self.last_time = time.time()
-
-    def handle_mimicking(self, control_signals):
-        print(f"[ACTION] Mimicking hand: {control_signals}")
-        self.mimicking_system.send_mimicking_commands(control_signals, SIMULATION_MODE)
 
     def handle_gesture_command(self, gesture):
         responses = {
@@ -493,7 +434,6 @@ class GestureControlSystem:
             'peace': ("Peace!", "PEACE"),
             'highfive': ("High five!", "HIGHFIVE")
         }
-        
         current_time = time.time()
         if gesture in responses and (gesture != self.last_gesture or current_time - self.last_gesture_time > 2.0):
             text, cmd = responses[gesture]
@@ -501,16 +441,15 @@ class GestureControlSystem:
             self.last_gesture = gesture
             self.last_gesture_time = current_time
             print(f"[ACTION] {gesture} detected - Command: {cmd}")
-            
+
     def handle_voice_command(self, command):
-        gesture = command  # 'fist', 'rock', etc.
+        gesture = command
         responses = {
             'fist': ("Fist bump!", "FIST"),
             'rock': ("Rock on!", "ROCK"),
             'peace': ("Peace!", "PEACE"),
             'highfive': ("High five!", "HIGHFIVE")
         }
-
         if gesture in responses:
             text, cmd = responses[gesture]
             speak(text)
@@ -526,7 +465,6 @@ class GestureControlSystem:
                 'PEACE': [0,2,2,0,0],
                 'HIGHFIVE': [2,2,2,2,2]
             }
-            
             if command in positions:
                 for finger, pos in enumerate(positions[command]):
                     arm_code.move(finger, pos, SIMULATION_MODE)
@@ -542,11 +480,23 @@ class GestureControlSystem:
         self.fps_queue.append(fps)
         return np.mean(self.fps_queue)
 
+    def start_voice_mode(self):
+        if self.voice_thread is None or not self.voice_thread.is_alive():
+            self.voice_thread = VoiceRecognizer(self.handle_voice_command)
+            self.voice_thread.start()
+            print("[SYSTEM] Voice mode started")
+
+    def stop_voice_mode(self):
+        if self.voice_thread is not None:
+            self.voice_thread.stop()
+            self.voice_thread.join()
+            self.voice_thread = None
+            print("[SYSTEM] Voice mode stopped")
+
     def main_loop(self):
         print("[SYSTEM] Starting gesture recognition system")
         window_name = 'Hand Gesture Control'
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-
         frame_interval = 1.0 / TARGET_FPS
         last_frame_time = time.time()
 
@@ -554,58 +504,51 @@ class GestureControlSystem:
             while self.running:
                 current_time = time.time()
                 elapsed = current_time - last_frame_time
-
                 if elapsed < frame_interval:
                     time.sleep(frame_interval - elapsed)
-
                 last_frame_time = current_time
- 
-                frame = self.picam2.capture_array()
 
+                frame = self.picam2.capture_array()
                 if INVERT_CAMERA:
                     frame = cv2.flip(frame, 1)
-
                 self.frame_count += 1
-                if self.frame_count % FRAME_SKIP != 0:
-                    cv2.imshow(window_name, frame)
-                    if cv2.waitKey(1) & 0xFF in (27, ord('q')):
-                        self.running = False
-                    continue
-                    
-                if self.asl_mode:
+
+                # Mode exclusivity: only one can be active
+                if self.voice_mode:
+                    # Show a message indicating voice mode is active
+                    blank = np.zeros_like(frame)
+                    cv2.putText(blank, "VOICE MODE ACTIVE", (50, 100),
+                                cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 4)
+                    cv2.imshow(window_name, blank)
+                elif self.asl_mode:
                     letter, processed_frame = self.asl_recognizer.predict_letter(frame)
                     if letter and (letter != self.asl_recognizer.last_letter or time.time() - self.asl_recognizer.last_time > 2):
                         self.asl_recognizer.send_asl_command(letter)
                         self.asl_recognizer.last_letter = letter
                         self.asl_recognizer.last_time = time.time()
                     cv2.putText(processed_frame, f"ASL: {letter}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
                 elif self.mimicking_mode:
-                    # Hand mimicking mode
                     signals, has_hand, processed_frame = self.mimicking_system.process_hand(frame)
                     if has_hand:
                         self.handle_mimicking(signals)
-                        # Display current finger positions
-                        cv2.putText(processed_frame, f"Mimicking: {signals}", (10, 30),
+                    cv2.putText(processed_frame, f"Mimicking: {signals}", (10, 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
                 else:
-                    # Regular gesture recognition mode (existing code)
                     gesture, confidence, processed_frame = self.recognizer.predict_gesture(frame)
-                    #gesture, confidence, processed_frame = self.colour_recognizer.detect_colour(processed_frame, draw=True)
-                    
                     if gesture and confidence > CONFIDENCE_THRESHOLD:
-                            self.handle_gesture_command(gesture)
-
+                        self.handle_gesture_command(gesture)
                     if gesture:
                         cv2.putText(
-                            processed_frame, 
-                            f"{gesture} ({confidence:.2f})", 
-                            (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 
-                            1, 
-                            (0, 255, 0) if confidence > CONFIDENCE_THRESHOLD else (0, 0, 255), 
+                            processed_frame,
+                            f"{gesture} ({confidence:.2f})",
+                            (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1,
+                            (0, 255, 0) if confidence > CONFIDENCE_THRESHOLD else (0, 0, 255),
                             2
                         )
-
                     fps = self.calculate_fps()
                     cv2.putText(
                         processed_frame,
@@ -616,21 +559,44 @@ class GestureControlSystem:
                         (0, 255, 0),
                         2
                     )
+                    cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
 
-                cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
-                
-                
-                # Add mode toggle
+                # Handle mode switching
                 key = cv2.waitKey(1) & 0xFF
-                
+                if key == ord('v'):
+                    # Toggle voice mode
+                    if not self.voice_mode:
+                        self.voice_mode = True
+                        self.asl_mode = False
+                        self.mimicking_mode = False
+                        self.start_voice_mode()
+                        print("[SYSTEM] Voice mode activated")
+                    else:
+                        self.voice_mode = False
+                        self.stop_voice_mode()
+                        print("[SYSTEM] Voice mode deactivated")
                 if key == ord('m'):
-                    self.mimicking_mode = not self.mimicking_mode
-                    print(f"[SYSTEM] {'Mimicking' if self.mimicking_mode else 'Gesture'} mode activated")
-                        
+                    if not self.mimicking_mode:
+                        self.mimicking_mode = True
+                        self.asl_mode = False
+                        if self.voice_mode:
+                            self.voice_mode = False
+                            self.stop_voice_mode()
+                        print("[SYSTEM] Mimicking mode activated")
+                    else:
+                        self.mimicking_mode = False
+                        print("[SYSTEM] Mimicking mode deactivated")
                 if key == ord('a'):
-                    self.asl_mode = not self.asl_mode
-                    print(f"[SYSTEM] {'ASL' if self.asl_mode else 'Other'} mode activated")
-                    
+                    if not self.asl_mode:
+                        self.asl_mode = True
+                        self.mimicking_mode = False
+                        if self.voice_mode:
+                            self.voice_mode = False
+                            self.stop_voice_mode()
+                        print("[SYSTEM] ASL mode activated")
+                    else:
+                        self.asl_mode = False
+                        print("[SYSTEM] ASL mode deactivated")
                 if key == ord('q'):
                     self.running = False
 
@@ -642,6 +608,7 @@ class GestureControlSystem:
     def cleanup(self):
         print("[SYSTEM] Cleaning up resources...")
         self.running = False
+        self.stop_voice_mode()
         self.picam2.stop()
         cv2.destroyAllWindows()
         for _ in range(5):
