@@ -27,14 +27,14 @@ import queue
 import json
 import absl.logging
 absl.logging.set_verbosity(absl.logging.ERROR)
-from ultralytics import YOLO
+
 # ================== CONFIGURATION ==================
 SIMULATION_MODE = False  # Enable if hardware isn't available
 FRAME_WIDTH = 1920        # Camera resolution width 640
 FRAME_HEIGHT = 1080       # Camera resolution height 480
 CONFIDENCE_THRESHOLD = 0.75  # Minimum confidence for accepting gestures
 FRAME_SKIP = 2 
-TARGET_FPS = 30           # Process every nth frame (performance optimization)
+TARGET_FPS = 15           # Process every nth frame (performance optimization)
 INVERT_CAMERA = True     # Mirror camera view for more intuitive interaction
 
 # ========== VOICE CONTROL CONFIGURATION ==========
@@ -285,7 +285,6 @@ class HandMimickingSystem:
     
     def process_hand(self, frame, draw=True):
         """Process frame to extract precise finger positions for mimicking"""
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(frame)
         control_signals = [0, 0, 0, 0, 0]  # Default position
         self.has_hand = False
@@ -304,18 +303,14 @@ class HandMimickingSystem:
             # Extract finger extension values
             landmarks = hand_landmarks.landmark
             palm_pos = np.array([landmarks[0].x, landmarks[0].y, landmarks[0].z])
-            palm_size = np.linalg.norm(landmarks[5].x - landmarks[0].x)
             
             # Calculate finger extensions (0=closed, 1=mid, 2=extended)
             for i, tip_idx in enumerate(self.finger_tips):
                 finger_tip = np.array([landmarks[tip_idx].x, landmarks[tip_idx].y, landmarks[tip_idx].z])
-                
                 # Determine base joint for each finger
                 base_idx = tip_idx - (4 if i > 0 else 3)
                 base_pos = np.array([landmarks[base_idx].x, landmarks[base_idx].y, landmarks[base_idx].z])
                 
-                #  # Wrist to index MCP
-                #extension = np.linalg.norm(finger_tip - base_pos) / (palm_size + 1e-6)  # Prevent 
                 # Calculate extension ratio
                 extension = np.linalg.norm(finger_tip - base_pos) / np.linalg.norm(base_pos - palm_pos)
                 
@@ -323,7 +318,7 @@ class HandMimickingSystem:
                 if extension < 0.5:
                     control_signals[i] = 0  # Closed
                 elif extension < 0.8:
-                    control_signals[i] = 1 # Mid-position
+                    control_signals[i] = 1  # Mid-position
                 else:
                     control_signals[i] = 2  # Fully extended
             
@@ -402,7 +397,7 @@ class GestureControlSystem:
         # Initialize camera with stable configuration
         self.picam2 = Picamera2()
         config = self.picam2.create_preview_configuration(
-            main={"size": (FRAME_WIDTH, FRAME_HEIGHT), "format": "BGR888"},
+            main={"size": (FRAME_WIDTH, FRAME_HEIGHT), "format": "RGB888"},
             transform=Transform(hflip=INVERT_CAMERA, vflip=False)
         )
         self.picam2.configure(config)
@@ -415,32 +410,22 @@ class GestureControlSystem:
             "AeExposureMode": 1,  # Normal exposure
             "AeMeteringMode": 0,  # Center-weighted
             "NoiseReductionMode": 2,
-             "AwbMode": 1,  # Grey world white balance
-            "ColourGains": (1.0, 1.0),  # Experiment with values
+             "AwbMode": 2,  # Grey world white balance
+            "ColourGains": (1.8, 1.2),  # Experiment with values
         })
         
-        #self.picam2.preview_configuration.main.size = (1280, 720)
-        #self.picam2.preview_configuration.main.format = "RGB888"
-        #self.picam2.preview_configuration.align()
-        #self.picam2.configure("preview")
         self.picam2.start()
-        
         self.recognizer = HandGestureRecognizer()
-        self.gesture_mode = False
         self.mimicking_system = HandMimickingSystem()
-        self.mimicking_mode = True
+        self.mimicking_mode = False
         self.asl_recognizer = ASLRecognizer()
         self.asl_mode = False
         
         self.voice_thread = None
-        self.voice_mode = False
+        self.voice_mode = True
         
         self.fps_queue = deque(maxlen=30)
         self.last_time = time.time()
-        
-    def handle_mimicking(self, control_signals):
-        print(f"[ACTION] Mimicking hand: {control_signals}")
-        self.mimicking_system.send_mimicking_commands(control_signals, SIMULATION_MODE)
 
     def handle_gesture_command(self, gesture):
         responses = {
@@ -456,6 +441,10 @@ class GestureControlSystem:
             self.last_gesture = gesture
             self.last_gesture_time = current_time
             print(f"[ACTION] {gesture} detected - Command: {cmd}")
+            
+    def handle_mimicking(self, control_signals):
+        print(f"[ACTION] Mimicking hand: {control_signals}")
+        self.mimicking_system.send_mimicking_commands(control_signals, SIMULATION_MODE)
 
     def handle_voice_command(self, command):
         gesture = command
@@ -507,21 +496,11 @@ class GestureControlSystem:
             self.voice_thread.join()
             self.voice_thread = None
             print("[SYSTEM] Voice mode stopped")
-            
-    def send_mimicking_commands(self, control_signals, simulation_mode=True):
-        """Send control signals to robotic hand"""
-        try:
-            for finger, position in enumerate(control_signals):
-                arm_code.move(finger, position, simulation_mode)
-            return True
-        except Exception as e:
-            print(f"[HAND MIMICKING] Error: {e}")
-            return False
 
     def main_loop(self):
         print("[SYSTEM] Starting gesture recognition system")
         window_name = 'Hand Gesture Control'
-        #cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         frame_interval = 1.0 / TARGET_FPS
         last_frame_time = time.time()
 
@@ -534,7 +513,6 @@ class GestureControlSystem:
                 last_frame_time = current_time
 
                 frame = self.picam2.capture_array()
-                
                 if INVERT_CAMERA:
                     frame = cv2.flip(frame, 1)
                 self.frame_count += 1
@@ -553,16 +531,14 @@ class GestureControlSystem:
                         self.asl_recognizer.last_letter = letter
                         self.asl_recognizer.last_time = time.time()
                     cv2.putText(processed_frame, f"ASL: {letter}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    #cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
-                    cv2.imshow(window_name, processed_frame)
+                    cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
                 elif self.mimicking_mode:
                     signals, has_hand, processed_frame = self.mimicking_system.process_hand(frame)
                     if has_hand:
                         self.handle_mimicking(signals)
                     cv2.putText(processed_frame, f"Mimicking: {signals}", (10, 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    #cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
-                    cv2.imshow(window_name, processed_frame)
+                    cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
                 else:
                     gesture, confidence, processed_frame = self.recognizer.predict_gesture(frame)
                     if gesture and confidence > CONFIDENCE_THRESHOLD:
@@ -587,8 +563,7 @@ class GestureControlSystem:
                         (0, 255, 0),
                         2
                     )
-                    cv2.imshow(window_name, processed_frame)
-                    #cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
+                    cv2.imshow(window_name, cv2.cvtColor(processed_frame, cv2.COLOR_RGB2BGR))
 
                 # Handle mode switching
                 key = cv2.waitKey(1) & 0xFF
@@ -626,18 +601,6 @@ class GestureControlSystem:
                     else:
                         self.asl_mode = False
                         print("[SYSTEM] ASL mode deactivated")
-                if key == ord('g'):
-                    if not self.gesture_mode:
-                        self.gesture_mode = True
-                        self.mimicking_mode = False
-                        self.asl_mode = False
-                        if self.voice_mode:
-                            self.voice_mode = False
-                            self.stop_voice_mode()
-                        print("[SYSTEM] Gesture mode activated")
-                    else:
-                        self.gesture_mode = False
-                        print("[SYSTEM] Gesture mode deactivated")
                 if key == ord('q'):
                     self.running = False
 

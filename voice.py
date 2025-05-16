@@ -473,11 +473,11 @@ class GestureControlSystem:
         #self.recognizer = HandGestureRecognizer()
         #self.colour_recognizer = ColourRecognizer()
         self.mimicking_system = HandMimickingSystem()  # Add new system
-        self.mimicking_mode = False
+        self.mimicking_mode = True
         self.asl_recognizer = ASLRecognizer()
         self.asl_mode = False  # Add a mode toggle for ASL
         self.voice_thread = None #VoiceRecognizer(self.handle_voice_command)
-        self.voice_mode = True #toggle for voice
+        self.voice_mode = False #toggle for voice
         
         self.fps_queue = deque(maxlen=30)
         self.last_time = time.time()
@@ -547,30 +547,30 @@ class GestureControlSystem:
         window_name = 'Hand Gesture Control'
         
         #while self.running and not self.voice_mode:
-            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-            frame_interval = 1.0 / TARGET_FPS
-            last_frame_time = time.time()
-            
-            current_time = time.time()
-            elapsed = current_time - last_frame_time
+        frame_interval = 1.0 / TARGET_FPS
+        last_frame_time = time.time()
+        
+        current_time = time.time()
+        elapsed = current_time - last_frame_time
 
-            if elapsed < frame_interval:
-                time.sleep(frame_interval - elapsed)
+        if elapsed < frame_interval:
+            time.sleep(frame_interval - elapsed)
 
-            last_frame_time = current_time
+        last_frame_time = current_time
 
-            frame = self.picam2.capture_array()
+        frame = self.picam2.capture_array()
 
-            if INVERT_CAMERA:
-                frame = cv2.flip(frame, 1)
+        if INVERT_CAMERA:
+            frame = cv2.flip(frame, 1)
 
-            self.frame_count += 1
-            if self.frame_count % FRAME_SKIP != 0:
-                cv2.imshow(window_name, frame)
-                if cv2.waitKey(1) & 0xFF in (27, ord('q')):
-                    self.running = False
-                continue
+        self.frame_count += 1
+        # if self.frame_count % FRAME_SKIP != 0:
+        #     cv2.imshow(window_name, frame)
+        #     if cv2.waitKey(1) & 0xFF in (27, ord('q')):
+        #         self.running = False
+        #     continue
 
         try:
             while self.running:
@@ -642,7 +642,7 @@ class GestureControlSystem:
                 if key == ord('q'):
                     self.running = False
                 
-               if key == ord('v'):
+                if key == ord('v'):
                     self.voice_mode = not self.voice_mode
                     print(f"[SYSTEM] {'Voice' if self.voice_mode else 'Other'} mode activated")
                     if self.voice_mode and (self.voice_thread is None or not self.voice_thread.is_alive)):
